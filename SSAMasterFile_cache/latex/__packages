@@ -1,0 +1,7 @@
+base
+data.table
+tidyr
+dplyr
+ggplot2
+xtable
+scales
