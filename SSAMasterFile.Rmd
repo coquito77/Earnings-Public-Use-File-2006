@@ -17,19 +17,19 @@ startTime <- Sys.time()
 knitr::opts_chunk$set(cache = TRUE, echo = FALSE, include = FALSE)
 
 doInstall <- FALSE # Change to TRUE if you do want packages installed.
-toInstall <- c( "data.table", "tidyr", "dplyr", "ggplot2", "scales","sampling")
+toInstall <- c( "data.table", "tidyr", "dplyr", "ggplot2", "scales","RColorBrewer")
 
 if (doInstall) {install.packages(toInstall, repos = "http://cran.us.r-project.org")}
 lapply(toInstall, library, character.only = TRUE)
 
-setwd("C:/Users/e551910/Google Drive/SSAMasterFile/") # set the working directory
+setwd("~/GitHub/Earnings-Public-Use-File-2006/") # set the working directory
 list.files() # see whats there
 
 load("lifeCyclErnnRiskRData.RData")
 
 ```
 
-```{r import data, eval=FALSE}
+```{r importData, eval=FALSE}
 
 # this if to replicate this study
 # https://www.newyorkfed.org/medialibrary/media/research/staff_reports/sr710.pdf
@@ -55,10 +55,8 @@ dataAnnual <- fread(con[1],
 
 proc.time() - ptm
 
-```
-
-```{r getUniqueSample, eval = FALSE}
-
+dataDemographics <- fread(con[2], header = T, sep = ',')%>%
+  select( -c(TOT_COV_EARN3750, QC3750, QC5152))
 
 ### download CPI data
 
@@ -66,7 +64,8 @@ proc.time() - ptm
 # or here
 # http://download.bls.gov/pub/time.series/cw/cw.data.0.Current
 
-# calculate real wages
+# to calculate real wages
+# import the data and extract the index for each year in January
 
 # http://www.cpwr.com/sites/default/files/annex_how_to_calculate_the_real_wages.pdf
 
@@ -75,50 +74,17 @@ wagesCPI <- fread("./CPIAUCSL.csv") %>%
   group_by(Year) %>%
   slice(1)
 
-dataAnnual <- dataAnnual %>%
-  as.data.frame() %>%
-  left_join(wagesCPI,
-            by = c("YEAR_EARN" = "Year")) %>%
-  select(-DATE) %>%
-  mutate(ANNUAL_EARNINGS = as.integer(ANNUAL_EARNINGS),
-         realWage = (ANNUAL_EARNINGS / VALUE)*100) %>%
-  as.data.table()
+```
 
-CountsByYear <- dataAnnual %>%
-  select(ID, YEAR_EARN) %>%
-  group_by(YEAR_EARN) %>%
-  summarise(count = n()) %>%
-  arrange(YEAR_EARN)
+```{r getUniqueSample, eval = FALSE}
 
-# library(devtools)
-# source_gist(6424112)
+# to get a sample 
+# 1. expand the earnings to the max years reported
+# 2. join the expanded earnings with the demographics
+# 2. get a sample by age starting 20 years old, then at 30, 40, 50, 60
+# by year, by gender
 
-IDbyFirstYear <- dataAnnual %>% 
-  select(ID, YEAR_EARN) %>%
-  #mutate(YEAR_EARN = as.integer(YEAR_EARN)) %>%
-  arrange(ID, YEAR_EARN) %>%
-  group_by(ID) %>%
-  slice(1)
-
-set.seed(1)
-
-sampleRecords <- IDbyFirstYear %>%
-  group_by(YEAR_EARN) %>%
-  do(sample_n(., 1200)) %>%
-  select(ID)
-
-# match the sample to the orig data
-
-dataAnnualSampleSet <- left_join(sampleRecords, dataAnnual,
-                                 by = c("ID" = "ID")) %>%
-  as.data.frame() %>%
-  dplyr::select(ID, YEAR_EARN = YEAR_EARN.y, ANNUAL_EARNINGS, ANNUAL_QTRS, realWage)
-
-# options(dplyr.print_max = 1e9) 
-
-# calculate the years reported
-
-dataAnnualSampleSetSummarized <- dataAnnualSampleSet %>%
+EarningsSummarizedByYear <- dataAnnual %>%
   select(ID, YEAR_EARN) %>%
   mutate(YEAR_EARN = as.integer(YEAR_EARN)) %>%
   group_by(ID) %>%
@@ -127,119 +93,149 @@ dataAnnualSampleSetSummarized <- dataAnnualSampleSet %>%
   select(ID,minYear, maxYear) %>%
   distinct() %>%
   mutate(Years = maxYear - minYear) %>%
-  select(ID, minYear, Years) %>%
-  ungroup() %>%
-  as.data.table()
+  select(ID, minYear, Years)
+
+# take a look at the summirized data
+
+hist(EarningsSummarizedByYear$Years)
+
+boxplot(EarningsSummarizedByYear$Years)
+
+boxplot(EarningsSummarizedByYear$Years, plot = FALSE)
+
+# exclude records that have less than 9 years earnings
+
+EarningsSummarizedByYear <- EarningsSummarizedByYear %>%
+  filter(Years > 9)
 
 # expand the data and merge it with the orig data
 
-dataAnnualSampleSetLong <- dataAnnualSampleSetSummarized[,.(Year=minYear+0:(Years-1)), ID] %>%
+dataAnnualSampleSetLong <- EarningsSummarizedByYear[,.(Year=minYear+0:(Years-1)), ID] %>%
   mutate(YEAR_EARN = as.character(Year)) %>%
+  select(-Year) %>%
   left_join(dataAnnual) %>%
   group_by(ID) %>%
-  arrange(Year) %>%
-  mutate(PriorYearEarnings = lag(realWage),
-         fivePriorYearEarnings = lag(realWage,5),
-         PriorYearDiff = realWage - PriorYearEarnings,
-         FiveYearDiff = realWage - fivePriorYearEarnings)
+  arrange(YEAR_EARN)
 
-hist(dataAnnualSampleSetLong$PriorYearEarnings)
+rm(EarningsSummarizedByYear)
+gc()
 
-dpriorYear <- density(dataAnnualSampleSetLong$PriorYearEarnings, 
-             bw = "sj",
-             na.rm = TRUE)
-dpriorYear
+# merge with the demographics data and calc age
+# select records that have earings when age is 20 years (before or after ok)
+# get the min for each ID
+# merge with the expanded earnings set
 
-dpriorFiveYears <- density(dataAnnualSampleSetLong$FiveYearDiff, 
-             bw = "sj",
-             na.rm = TRUE)
-dpriorFiveYears
+IDbyFirstYear <- dataAnnual %>% 
+  select(ID, YEAR_EARN) %>%
+  left_join(dataDemographics) %>%
+  select(ID, YEAR_EARN, YOB, SEX) %>%
+  mutate(YOB = as.integer(YOB),
+         YearEarn = as.integer(YEAR_EARN),
+         AgeEarnings = YearEarn - YOB) %>%
+  arrange(ID, YEAR_EARN) %>%
+  filter(AgeEarnings == 20) %>%
+  group_by(ID) %>%
+  slice(1)
 
+length((unique(IDbyFirstYear$ID)))
 
-```
+with(IDbyFirstYear, table(YEAR_EARN, SEX, useNA = "ifany" ))
 
-```{r plotEarningsDensity, eval=FALSE}
+# get a sample of 4000 unique ID by year and gender
 
-par(mfrow=c(2,1))
+set.seed(1)
 
-plot(dpriorYear)
-plot(dpriorFiveYears)
-
-par(mfrow=c(1,1)
-
-## add normal density curve
-
-```
-
-```{r getDemographicData, eval=FALSE}
-
-rm(dataAnnual)
-
-dataDemographics <- fread(con[2], header = T, sep = ',')
-
-demographicWithSample <- left_join(dataAnnualSampleSetLong,
-                                   dataDemographics) %>%
-  mutate(FiveYearPrcnChng  =  FiveYearDiff/realWage ) %>%
+sampleRecordsFemaleStart20Yrs <- IDbyFirstYear %>%
+  filter(SEX == 2) %>%
   group_by(YEAR_EARN) %>%
-  mutate(FiveYearPrcnChngRank =  cume_dist(FiveYearPrcnChng),
-         FiveYearPrcnChngRankGroups = cut(FiveYearPrcnChngRank, # make groups 
-                                          #breaks = c(0,.24,.49,.75,1),
-                                          breaks = seq(0, 1, 0.25),
-                                          #labels = c("0-.24",".25-.5",".51-.75","1"), 
-                                          include.lowest = TRUE),
-         ANNUAL_EARNINGSRank =  cume_dist(ANNUAL_EARNINGS),
-         ANNUAL_EARNINGSRankGroups = cut(ANNUAL_EARNINGSRank, # make groups 
-                                         #breaks = c(0,.24,.49,.75,1),
-                                         breaks = seq(0, 1, 0.25),
-                                         #labels = c("0-.24",".25-.5",".51-.75","1"), 
-                                         include.lowest = TRUE),
-         fivePriorYearEarningsRank =  cume_dist(fivePriorYearEarnings),
-         fivePriorYearEarningsRankGroups = cut(fivePriorYearEarningsRank, # make groups 
-                                               #breaks = c(0,.24,.49,.75,1),
-                                               breaks = seq(0, 1, 0.25),
-                                               #labels = c("0-.24",".25-.5",".51-.75","1"), 
-                                               include.lowest = TRUE))
+  do(sample_n(., 4000, replace = FALSE)) %>%
+  select(ID) 
+
+with(sampleRecordsFemaleStart20Yrs, table(YEAR_EARN, useNA = "ifany" ))
+
+sampleRecordsMaleStart20Yrs <- IDbyFirstYear %>%
+  filter(SEX == 1) %>%
+  group_by(YEAR_EARN) %>%
+  do(sample_n(., 4000, replace = FALSE)) %>%
+  select(ID) %>%
+  full_join(sampleRecordsFemaleStart20Yrs) %>%
+  select(-YEAR_EARN)
+
+sampleRecordsMaleAndFemaleWithEArningsAt20Yrs <- sampleRecordsMaleStart20Yrs %>%
+  inner_join(dataAnnualSampleSetLong) %>%
+  left_join(dataDemographics) %>%
+  mutate(YOB = as.integer(YOB),
+         YearEarn = as.integer(YEAR_EARN),
+         AgeEarnings = YearEarn - YOB) %>%
+  filter(AgeEarnings > 19)
+
+rm(list=setdiff(ls(),
+                c("sampleRecordsMaleAndFemaleWithEArningsAt20Yrs",
+                  "wagesCPI",
+                  "startTime")))
+
+gc()
+
+# calculate real wages
+
+# http://www.cpwr.com/sites/default/files/annex_how_to_calculate_the_real_wages.pdf
+
+setEveryFithYear <- sampleRecordsMaleAndFemaleWithEArningsAt20Yrs %>%
+  group_by(ID) %>% 
+  slice(c( seq(1, 60, by=5 ))) %>% # get the earnings
+  left_join(wagesCPI,
+            by = c("YEAR_EARN" = "Year")) %>%
+  select(-DATE) %>%
+  mutate(ANNUAL_EARNINGS = as.integer(ANNUAL_EARNINGS),
+         realWage = (ANNUAL_EARNINGS / VALUE)*100)
+
+rm(list=setdiff(ls(),
+                c("setEveryFithYear",
+                  "startTime")))
+
+gc()
+
+summary(setEveryFithYear)
+
+str(setEveryFithYear)
+
+# save.image("./lifeCyclErnnRiskRData.RData")
+
+# remove the SSA data
 
 unlink("./EPUF2006_ANNUAL.csv")
 
 unlink("./EPUF2006_DEMOGRAPHIC.csv")
-
-# remove all the objects exept one
-
-rm(list=setdiff(ls(), "demographicWithSample"))
-
-# add age of earner 
-
-demographicWithSample <- demographicWithSample %>%
-mutate(YOB = as.integer(YOB),
-       AgeEarnings = Year - YOB)
-
-save.image(file = "lifeCyclErnnRiskRData.RData")
-
 ```
+
 
 ```{r plotHistogramOfScores, eval=FALSE, fig.cap = "Most people make around the same amount of money five years later", message = FALSE, warning = FALSE, include=TRUE}
 
 # http://stackoverflow.com/questions/5688082/ggplot2-overlay-histogram-with-density-curve
 
-demographicWithSample %>%
-  ggplot( aes(fivePriorYearEarnings)) +
-  geom_histogram(aes(), bins = 100, alpha = 1/3) +
+colourCount = length(unique(setEveryFithYear$AgeEarnings))
+getPalette = colorRampPalette(brewer.pal(8, "Accent"))
+
+setEveryFithYear %>%
+  ggplot( aes(realWage, color = as.factor(AgeEarnings))) +
+  geom_freqpoly(aes(), bins = 100, alpha = 1/3, position="identity") +
   stat_function(fun = dnorm, 
                 na.rm = TRUE,
-                args = list(mean = mean(demographicWithSample$fivePriorYearEarnings, 
+                args = list(mean = mean(setEveryFithYear$realWage, 
                                         na.rm = TRUE), 
-                            sd = sd(demographicWithSample$fivePriorYearEarnings,
+                            sd = sd(setEveryFithYear$realWage,
                                     na.rm = TRUE)), 
                 #lwd = 1, 
                 size = 1,
                 alpha = 1/3,
                 col = 'red') +
   scale_y_continuous(#trans=log_trans(), 
-                     labels = comma) +
+    labels = comma) +
   scale_x_continuous(labels = comma) +
   theme_minimal() +
-  labs(x = "Five Year Difference", y = "Frequency") 
+  scale_color_manual(values = getPalette(colourCount),
+                     name = "Earnings by year") +
+  labs(x = "Earnings", y = "Frequency")
 
 ```
 
@@ -248,25 +244,73 @@ demographicWithSample %>%
 
 # http://stackoverflow.com/questions/5688082/ggplot2-overlay-histogram-with-density-curve
 
-demographicWithSample %>%
-  ggplot( aes(PriorYearDiff)) +
-  geom_histogram(aes(), bins = 100) +
-  facet_wrap(~ Year,  ncol = 7, scales = "free") +
+setEveryFithYear %>%
+  ggplot( aes(realWage, fill = as.factor(AgeEarnings))) +
+  geom_histogram(aes(), bins = 100, alpha = 1/3, position="identity") +
+  facet_wrap(~ YOB, ncol = 7) +
   stat_function(fun = dnorm, 
                 na.rm = TRUE,
-                args = list(mean = mean(demographicWithSample$PriorYearDiff, 
+                args = list(mean = mean(setEveryFithYear$realWage, 
                                         na.rm = TRUE), 
-                            sd = sd(demographicWithSample$PriorYearDiff,
+                            sd = sd(setEveryFithYear$realWage,
                                     na.rm = TRUE)), 
                 #lwd = 1, 
                 size = 1,
                 alpha = 1/3,
                 col = 'red') +
+  scale_fill_manual(values = getPalette(colourCount),
+                     name = "Earnings by year") +
   scale_y_continuous(labels=function(x)x/1000)+
   scale_x_continuous(labels = comma) +
   #coord_cartesian(xlim = c(30000, 30000)) +
   theme_minimal() +
-  labs(x = "Prior Year Difference", y = "Frequency (thousands)") +
+  labs(x = "Earnings by year", y = "Frequency (thousands)") +
+  theme(
+    #panel.grid.major = element_blank(), 
+    #panel.grid.minor = element_blank(),
+    panel.background = element_rect(colour = "grey90",
+                                    size = 1),
+    strip.text.x = element_text(size = 4, 
+                                colour = "black", 
+                                angle = 00 #, lineheight = .5
+    ),
+    axis.title.x = element_text(size = 8, 
+                                angle = 00),
+    axis.text.x = element_text(colour = "black", 
+                               size = 4, 
+                               angle = 90, 
+                               vjust = .5),
+    axis.title.y = element_text(size = 8, 
+                                angle = 90),
+    axis.text.y = element_text(colour = "black", 
+                               size = 5, 
+                               angle = 00, 
+                               vjust = .5),
+    plot.margin = unit(c(0,0,0,0), "cm"))
+
+
+
+setEveryFithYear %>%
+  ggplot( aes(realWage, color = as.factor(AgeEarnings))) +
+  geom_freqpoly(aes(), bins = 100, alpha = 1/3, position="identity") +
+  facet_wrap(~ YOB, ncol = 10) +
+  stat_function(fun = dnorm, 
+                na.rm = TRUE,
+                args = list(mean = mean(setEveryFithYear$realWage, 
+                                        na.rm = TRUE), 
+                            sd = sd(setEveryFithYear$realWage,
+                                    na.rm = TRUE)), 
+                #lwd = 1, 
+                size = 1,
+                alpha = 1/3,
+                col = 'red') +
+  scale_colour_manual(values = getPalette(colourCount),
+                     name = "Earnings by year") +
+  scale_y_continuous(labels=function(x)x/1000)+
+  scale_x_continuous(labels = comma) +
+  #coord_cartesian(xlim = c(30000, 30000)) +
+  theme_minimal() +
+  labs(x = "Earnings by year", y = "Frequency (thousands)") +
   theme(
     #panel.grid.major = element_blank(), 
     #panel.grid.minor = element_blank(),
