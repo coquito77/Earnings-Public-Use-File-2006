@@ -2,7 +2,10 @@
 title: "Tufte Handout"
 author: "John Smith"
 date: "August 13th, 2014"
-output: rmarkdown::tufte_handout
+output:
+  tufte::tufte_handout:
+    fig_width: 10
+    fig_height: 10
 ---
 
 ```{r options, cache = FALSE, echo=FALSE, include=FALSE}
@@ -15,7 +18,9 @@ startTime <- Sys.time()
 knitr::opts_chunk$set(cache = TRUE, echo = FALSE, include = FALSE)
 
 doInstall <- FALSE # Change to TRUE if you do want packages installed.
-toInstall <- c( "data.table", "tidyr", "dplyr", "ggplot2", "scales","RColorBrewer")
+toInstall <- c( "data.table", "tidyr", "dplyr", "ggplot2",
+                "scales","RColorBrewer", "ineq", "showtext",
+                "stringr", "grid")
 
 if (doInstall) {install.packages(toInstall, repos = "http://cran.us.r-project.org")}
 lapply(toInstall, library, character.only = TRUE)
@@ -23,9 +28,7 @@ lapply(toInstall, library, character.only = TRUE)
 setwd("~/GitHub/Earnings-Public-Use-File-2006/") # set the working directory
 list.files() # see whats there
 
-load("lifeCyclErnnRiskRData.RData")
-packrat::off()
-
+#packrat::off()
 
 ```
 
@@ -209,6 +212,12 @@ unlink("./EPUF2006_DEMOGRAPHIC.csv")
 ```
 
 
+```{r loadData, echo= FALSE}
+
+load("lifeCyclErnnRiskRData.RData")
+
+```
+
 ```{r plotHistogramOfScores, eval=FALSE, fig.cap = "Most people make around the same amount of money five years later", message = FALSE, warning = FALSE, include=TRUE}
 
 # http://stackoverflow.com/questions/5688082/ggplot2-overlay-histogram-with-density-curve
@@ -337,8 +346,192 @@ setEveryFithYear %>%
 ```
 
 
+```{r setSpreadCalcRealWage}
 
-```{r plot}
+setEveryFithYearByAgeEarnings <- setEveryFithYear %>%
+  mutate(AgeEarningsGroup = paste0("AgeEarnings", AgeEarnings)) %>%
+  select( ID,  YOB, SEX, AgeEarningsGroup, realWage) %>%
+  spread( AgeEarningsGroup, realWage) %>%
+  ungroup %>%
+  mutate( RankAgeEarnings20 =  ntile(AgeEarnings20, 100))
+
+percentChange <- setEveryFithYearByAgeEarnings %>%
+  group_by(ID ) %>%
+  mutate_each(funs(whatever = (. - AgeEarnings20)/AgeEarnings20), AgeEarnings25:AgeEarnings70) %>%
+  gather(AgeEarnings, PercentChange, -c(ID, YOB, SEX, AgeEarnings20, RankAgeEarnings20))
+
+```
+
+
+
+
+
+```{r plotPercentChange, eval= FALSE}
+d <- percentChange %>%
+  mutate(AgeEarningsNum =  substr(AgeEarnings, 12,13) ,
+         AgeEarningsNum = as.numeric(AgeEarningsNum)) %>%
+ ggplot( aes(AgeEarningsNum, PercentChange)) + geom_point()
+
+d + stat_summary(fun.y = "median", colour = "red", size = 2, geom = "point")
+
+d + aes(colour = factor(RankAgeEarnings20)) + stat_summary(fun.y = median, geom="line")
+
+d
+
+```
+
+```{r statSummary, eval=TRUE, fig.fullwidth = TRUE, fig.cap = "Percent Wage Increase By Earnings Percentile at 20 years old", message = FALSE, warning = FALSE, include=TRUE}
+
+library(e1071)
+library(psych)
+
+setPercentChange <- percentChange %>% 
+  select(AgeEarnings, RankAgeEarnings20, PercentChange) %>%
+  ungroup() %>%
+  mutate(PercentChange = as.numeric(PercentChange*100)) %>%
+  na.omit() %>% as.data.frame %>%
+  select(AgeEarnings, RankAgeEarnings20, PercentChange)
+
+setSummaryPercentChange <- setPercentChange %>%
+  group_by(AgeEarnings, RankAgeEarnings20) %>% 
+  summarise(count = n(),
+            mean = mean(PercentChange),
+            sd = sd(PercentChange),
+            skew = psych::skew(PercentChange),
+            median = median(PercentChange),
+            kurtosis = e1071::kurtosis(PercentChange))
+
+SamplesetSummaryPercentChange <- setSummaryPercentChange %>%
+  mutate(AgeEarningsNum =  substr(AgeEarnings, 12,13) ,
+         AgeEarningsNum = as.numeric(AgeEarningsNum))  %>% 
+  filter(RankAgeEarnings20 %in% (c(1:5,53:48,96:100)))
+  
+  # display.brewer.all()
+
+colourCount = length(unique(SamplesetSummaryPercentChange$RankAgeEarnings20))
+getPalette = colorRampPalette(brewer.pal(8, "Set1"))
+
+ggplot(SamplesetSummaryPercentChange,
+       aes(AgeEarnings, median, group = RankAgeEarnings20, color = as.factor(RankAgeEarnings20) )) +
+  geom_line(alpha = 1/2 ) +
+  scale_y_continuous(trans = log_trans(), 
+    labels = comma) +
+  theme_minimal() +
+  scale_color_manual(values = getPalette(colourCount),
+                     name = "Earnings rakings at 20 years old") +
+  theme(
+    #panel.grid.major = element_blank(), 
+    #panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 8, 
+                                angle = 00),
+    axis.text.x = element_text(colour = "black", 
+                               size = 4, 
+                               angle = 90, 
+                               vjust = .5),
+    axis.title.y = element_text(size = 8, 
+                                angle = 90),
+    axis.text.y = element_text(colour = "black", 
+                               size = 5, 
+                               angle = 00, 
+                               vjust = .5)#,
+    #plot.margin = unit(c(0,0,0,0), "cm")
+  )
+
+```
+
+
+```{r GiniCoeficient, eval = TRUE}
+
+# inspiration is from here
+# http://ellisp.github.io/blog/2015/09/12/inequality-stats-distributions/
+
+setEveryFithYear <- setEveryFithYear %>% 
+  mutate(YOEarnedRounded = signif(YearEarn, 3))
+
+doPlot = function(sel_name) {
+  dum = filter(setEveryFithYear, YOEarnedRounded == sel_name) %>% droplevels()
+  
+  Gini(dum$realWage, corr = FALSE, na.rm = TRUE)
+}
+
+test <- lapply(unique(setEveryFithYear$YOEarnedRounded), doPlot)
+
+Category_names <- unique(setEveryFithYear$YOEarnedRounded)
+# assign player names to list of tables
+names(test) <- Category_names
+
+df <- test %>% # head(1000) %>%
+  plyr::ldply(data.frame) %>%
+  select(Category = 1, GiniValue = 2) %>%
+  arrange(Category)
+
+df 
+
+```
+
+
+```{r table survivalFinalpander, include=TRUE}
+
+library(pander)
+
+#panderOptions('digits', 2)
+panderOptions('round', 2)
+panderOptions('keep.trailing.zeros', TRUE)
+panderOptions('decimal.mark', ".")
+panderOptions('big.mark', ",")
+panderOptions('table.split.cells', c(5, 3, 5, 5, 3, 5))
+
+pander(df,
+       split.table = Inf,
+       caption = "Real wages Gini coefiencient by decade. The higher the coeficient the more unequal are the earnings.  A coeficient of zero all individuals have the same income")
+
+```
+
+```{r plotLorezCurve, eval=TRUE, fig.fullwidth = TRUE, fig.cap = "Percent Wage Increase By Earkings Percentile at  20 years old", message = FALSE, warning = FALSE, include=TRUE}
+
+doPlot = function(sel_name) {
+  dum = filter(setEveryFithYear, YOEarnedRounded == sel_name) %>% droplevels()
+  
+  lorenz <- Lc(dum$realWage)
+  
+  lorenz_df <- data.frame(prop_pop = lorenz$p, income = lorenz$L) %>%
+    mutate(prop_equality = prop_pop)
+  
+}
+
+test <- lapply(unique(setEveryFithYear$YOEarnedRounded), doPlot)
+
+Category_names <- unique(setEveryFithYear$YOEarnedRounded)
+# assign player names to list of tables
+names(test) <- Category_names
+
+df <- test %>% # head(1000) %>%
+  plyr::ldply(data.frame) %>%
+  select(ethnicity = 1, prop_pop, income, prop_equality)
+
+p1 <- ggplot(df, aes(x = prop_pop, y = income)) +
+  geom_ribbon(aes(ymax = prop_equality, ymin = income), fill = "yellow") +
+  geom_line() +
+  facet_wrap(~ ethnicity,  ncol = 1) +
+  geom_abline(slope = 1, intercept = 0) +
+  scale_x_continuous("\nCumulative proportion of population", label = percent) +
+  scale_y_continuous("Cumulative proportion of income\n", label = percent) +
+  theme_minimal(base_family = "Courier") +
+  coord_equal() +
+  annotate("text", 0.53, 0.32, label = "Inequality\ngap", family = "Courier") +
+  annotate("text", 0.5, 0.6, label = "Complete equality line", angle = 45, family = "Courier") + 
+  ggtitle (
+    str_wrap("Cumulative distribution of real wages", 46))
+
+print(p1)
+
+grid.text("Source: SSA’s Master Earnings File\n2006 Earnings Public-Use File", 0.8, 0.23, 
+          gp = gpar(fontfamily = "Courier", fontsize = 8))
+
+
+```
+
+```{r plot, eval = FALSE}
 
 
 makeplot_mosaic <- function(data, x, y, ...){
@@ -372,21 +565,6 @@ makeplot_mosaic(demographicWithSample,  SEX, FiveYearPrcnChngRankGroups)
 ```
 
 
-
-
-
-```{r statSummary}
-
-library(psych)
-
-
-test <- describeBy(demographicWithSample, 
-           demographicWithSample$Year,
-           skew=TRUE,
-           mat=TRUE,
-           ranges=FALSE) 
-
-```
 
 
 
