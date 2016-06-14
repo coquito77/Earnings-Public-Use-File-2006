@@ -1,7 +1,12 @@
 ---
 title: "Tufte Handout"
 author: "John Smith"
-date: "August 13th, 2014"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+tags: [nothing, nothingness]
+abstract: |
+  This is the abstract.
+
+  It consists of two paragraphs.
 output:
   tufte::tufte_handout:
     fig_width: 10
@@ -20,7 +25,7 @@ knitr::opts_chunk$set(cache = TRUE, echo = FALSE, include = FALSE)
 doInstall <- FALSE # Change to TRUE if you do want packages installed.
 toInstall <- c( "data.table", "tidyr", "dplyr", "ggplot2",
                 "scales","RColorBrewer", "ineq", "showtext",
-                "stringr", "grid")
+                "stringr", "grid", "jpeg", "grid")
 
 if (doInstall) {install.packages(toInstall, repos = "http://cran.us.r-project.org")}
 lapply(toInstall, library, character.only = TRUE)
@@ -78,6 +83,37 @@ wagesCPI <- fread("./CPIAUCSL.csv") %>%
   slice(1)
 
 ```
+
+
+
+
+
+```{r readPicture, fig.cap="Illustration from a 1916 advertisement for a vocational school in the back of a US magazine", message=FALSE, warning=FALSE, include=TRUE}
+
+
+myurl <- "https://upload.wikimedia.org/wikipedia/commons/5/53/Going_up_or_down_advertisement.jpg"
+
+z <- tempfile()
+
+download.file(myurl,z,mode="wb")
+
+pic <- readJPEG(z)
+
+unlink(z) # cleanup
+
+g <- rasterGrob(pic, interpolate=TRUE)
+
+qplot(1:10, 1:10, geom="blank") +
+  annotation_custom(g, xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  geom_point(color = "blue", alpha = 0) + 
+  annotate("text", 
+           label = "Retrieved 15 October 2013 from Popular Science Monthly, Modern Publishing Co.,\n New York, Vol. 88, No. 3, March 1916, p. 105 on Google Books",
+           x = 5, y = 2.5, size = 2,
+           colour = "grey45")
+
+
+```
+
 
 ```{r getUniqueSample, eval = FALSE}
 
@@ -624,4 +660,4 @@ rm(list=ls(all=TRUE)) #start with empty workspace
 
 
 
-
+```
